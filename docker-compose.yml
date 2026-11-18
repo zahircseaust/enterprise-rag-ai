@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: rag-postgres
+    environment:
+      POSTGRES_DB: ragdb
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: rag
+    ports:
+      - "5433:5432"   # 5433: avoids clashing with a local Postgres on 5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag -d ragdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    container_name: rag-app
+    profiles: ["app"]          # start with: docker compose --profile app up --build
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_USER: rag
+      DB_PASSWORD: rag
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      APP_API_KEY: ${APP_API_KEY:-}
+    ports:
+      - "8080:8080"
+
+volumes:
+  pgdata:

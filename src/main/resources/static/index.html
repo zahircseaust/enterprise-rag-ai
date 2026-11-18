@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Knowledge desk</title>
+<style>
+  :root {
+    --ink: #1d2a3a; --muted: #5d6b7c; --paper: #f5f7fa; --panel: #ffffff;
+    --line: #d6dde6; --accent: #2f5d8a; --ok: #2e7d4f; --bad: #b23b3b;
+    font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink:#e3e9f0; --muted:#9aa8b8; --paper:#121922; --panel:#1a2430; --line:#2c3a4a; --accent:#7fb0e0; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); }
+  main { display: grid; grid-template-columns: minmax(260px, 22vw) 1fr; gap: 1px; height: 100vh; background: var(--line); }
+  aside, section { background: var(--panel); padding: 1.25rem; min-width: 0; min-height: 0; }
+  aside { overflow-y: auto; resize: horizontal; }
+  h1 { font-size: 1.15rem; margin: 0 0 1rem; }
+  h2 { font-size: .95rem; color: var(--muted); font-weight: 600; margin: 1.25rem 0 .5rem; }
+  label, input, button, textarea { font: inherit; }
+  input[type=text], textarea { width: 100%; padding: .55rem .65rem; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); }
+  button { padding: .5rem .9rem; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: var(--panel); cursor: pointer; }
+  button.ghost { background: transparent; color: var(--accent); }
+  button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li.doc { padding: .5rem 0; border-bottom: 1px solid var(--line); font-size: .9rem; display: flex; justify-content: space-between; align-items: center; gap: .5rem; }
+  li.doc > span { min-width: 0; overflow-wrap: anywhere; }
+  li.doc button { flex-shrink: 0; }
+  .status { font-size: .8rem; color: var(--muted); }
+  .READY { color: var(--ok); } .FAILED { color: var(--bad); }
+  section { display: flex; flex-direction: column; }
+  #log { flex: 1; overflow-y: auto; width: 100%; max-width: 110ch; margin: 0 auto; }
+  .msg { margin: 0 0 1.25rem; line-height: 1.55; white-space: pre-wrap; }
+  .msg.user { color: var(--muted); }
+  .msg.user::before { content: "You: "; font-weight: 600; }
+  form.ask { display: flex; gap: .5rem; width: 100%; max-width: 110ch; margin: 0 auto; }
+  form.ask textarea { flex: 1; resize: vertical; }
+  .msg.bot.wait { color: var(--muted); font-style: italic; }
+  .msg.bot.err { color: var(--bad); }
+  @media (max-width: 720px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <aside>
+    <h1>Knowledge desk</h1>
+    <label for="tenant">Workspace</label>
+    <input id="tenant" type="text" value="default">
+    <label for="apikey" style="display:block;margin-top:.5rem">API key (if required)</label>
+    <input id="apikey" type="text" autocomplete="off">
+    <h2>Documents</h2>
+    <input id="file" type="file" aria-label="Choose a document">
+    <p><button id="upload">Upload document</button></p>
+    <ul id="docs"><li class="status">No documents yet. Upload a PDF, Word file, or text file to start.</li></ul>
+  </aside>
+  <section>
+    <div id="log" aria-live="polite"></div>
+    <form class="ask" id="ask">
+      <textarea id="q" rows="2" placeholder="Ask about your documents" required></textarea>
+      <div style="display:flex;flex-direction:column;gap:.4rem">
+        <button type="submit">Ask</button>
+        <button type="button" class="ghost" id="newchat">New chat</button>
+      </div>
+    </form>
+  </section>
+</main>
+<script>
+let conversationId = null;
+const $ = id => document.getElementById(id);
+const headers = (extra = {}) => {
+  const h = { 'X-Tenant-Id': $('tenant').value, ...extra };
+  if ($('apikey').value) h['X-API-Key'] = $('apikey').value;
+  return h;
+};
+
+async function loadDocs() {
+  const res = await fetch('/api/v1/documents', { headers: headers() });
+  const ul = $('docs');
+  if (!res.ok) { ul.innerHTML = '<li class="status FAILED">Could not load documents. Check the workspace and API key.</li>'; return; }
+  const docs = await res.json();
+  ul.innerHTML = docs.length ? '' : '<li class="status">No documents yet. Upload a PDF, Word file, or text file to start.</li>';
+  for (const d of docs) {
+    const li = document.createElement('li'); li.className = 'doc';
+    li.innerHTML = `<span><span class="name"></span><br><span class="status ${d.status}">${d.status.toLowerCase()}${d.status === 'READY' ? ` · ${d.chunkCount} chunks` : ''}</span></span>`;
+    li.querySelector('.name').textContent = d.filename;
+    const del = document.createElement('button'); del.className = 'ghost'; del.textContent = 'Delete';
+    del.onclick = async () => { await fetch(`/api/v1/documents/${d.id}`, { method: 'DELETE', headers: headers() }); loadDocs(); };
+    li.appendChild(del); ul.appendChild(li);
+  }
+  if (docs.some(d => d.status === 'PROCESSING')) setTimeout(loadDocs, 2000);
+}
+
+$('upload').onclick = async () => {
+  const f = $('file').files[0]; if (!f) return;
+  const body = new FormData(); body.append('file', f);
+  await fetch('/api/v1/documents', { method: 'POST', headers: headers(), body });
+  $('file').value = ''; loadDocs();
+};
+
+function addMsg(text, cls) {
+  const p = document.createElement('p'); p.className = 'msg ' + cls; p.textContent = text;
+  $('log').appendChild(p); $('log').scrollTop = $('log').scrollHeight; return p;
+}
+
+$('ask').onsubmit = async e => {
+  e.preventDefault();
+  const question = $('q').value.trim(); if (!question) return;
+  $('q').value = ''; addMsg(question, 'user');
+  const out = addMsg('Thinking… (first answer can take a minute on a local model)', 'bot wait');
+  let res;
+  try { res = await fetch('/api/v1/chat/stream', {
+    method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ question, conversationId })
+  }); } catch (err) { out.className = 'msg bot err'; out.textContent = 'Could not reach the server.'; return; }
+  if (!res.ok) { out.className = 'msg bot err'; out.textContent = 'The question could not be sent. Check the workspace and API key.'; return; }
+  const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read(); if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n\n')) >= 0) {
+      const raw = buf.slice(0, i); buf = buf.slice(i + 2);
+      const ev = (raw.match(/^event:(.*)$/m) || [])[1]?.trim();
+      const data = raw.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5)).join('\n');
+      if (!data) continue;
+      const json = JSON.parse(data);
+      if (ev === 'meta') conversationId = json.conversationId;
+      else if (ev === 'token') { if (out.classList.contains('wait')) { out.className = 'msg bot'; out.textContent = ''; } out.textContent += json.t; $('log').scrollTop = $('log').scrollHeight; }
+      else if (ev === 'error') { out.className = 'msg bot err'; out.textContent += '\n[' + json.message + ']'; }
+    }
+  }
+};
+
+$('q').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('ask').requestSubmit(); } };
+$('newchat').onclick = () => { conversationId = null; $('log').innerHTML = ''; };
+$('tenant').onchange = () => { conversationId = null; $('log').innerHTML = ''; loadDocs(); };
+loadDocs();
+</script>
+</body>
+</html>
